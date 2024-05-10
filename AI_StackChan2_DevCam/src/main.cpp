@@ -16,14 +16,12 @@
 
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
-#include "rootCACertificate.h"
+#include "rootCAGemini.h"
 #include "rootCAgoogle.h"
 #include <ArduinoJson.h>
 #include <ESP32WebServer.h>
 #include <ESPmDNS.h>
 #include <deque>
-#include "AudioWhisper.h"
-#include "Whisper.h"
 #include "Audio.h"
 #include "CloudSpeechClient.h"
 
@@ -95,7 +93,7 @@ std::deque<String> chatHistory;
 #define USE_SDCARD
 #define WIFI_SSID "SET YOUR WIFI SSID"
 #define WIFI_PASS "SET YOUR WIFI PASS"
-#define OPENAI_APIKEY "SET YOUR OPENAI APIKEY"
+#define GEMINI_APIKEY "SET YOUR GEMINI APIKEY"
 #define VOICEVOX_APIKEY "SET YOUR VOICEVOX APIKEY"
 #define STT_APIKEY "SET YOUR STT APIKEY"
 
@@ -135,7 +133,7 @@ const Expression expressions_table[] = {
 ESP32WebServer server(80);
 
 //---------------------------------------------
-String OPENAI_API_KEY = "";
+String GEMINI_API_KEY = "";
 String VOICEVOX_API_KEY = "";
 String STT_API_KEY = "";
 String TTS_SPEAKER_NO = "3";
@@ -162,8 +160,8 @@ static const char APIKEY_HTML[] PROGMEM = R"KEWL(
   <body>
     <h1>APIキー設定</h1>
     <form>
-      <label for="role1">OpenAI API Key</label>
-      <input type="text" id="openai" name="openai" oninput="adjustSize(this)"><br>
+      <label for="role1">Gemini API Key</label>
+      <input type="text" id="gemini" name="gemini" oninput="adjustSize(this)"><br>
       <label for="role2">VoiceVox API Key</label>
       <input type="text" id="voicevox" name="voicevox" oninput="adjustSize(this)"><br>
       <label for="role3">Speech to Text API Key</label>
@@ -179,8 +177,8 @@ static const char APIKEY_HTML[] PROGMEM = R"KEWL(
         const formData = new FormData();
 
         // 各ロールの値をFormDataオブジェクトに追加
-        const openaiValue = document.getElementById("openai").value;
-        if (openaiValue !== "") formData.append("openai", openaiValue);
+        const geminiValue = document.getElementById("gemini").value;
+        if (geminiValue !== "") formData.append("gemini", geminiValue);
 
         const voicevoxValue = document.getElementById("voicevox").value;
         if (voicevoxValue !== "") formData.append("voicevox", voicevoxValue);
@@ -256,7 +254,8 @@ static const char ROLE_HTML[] PROGMEM = R"KEWL(
 String speech_text = "";
 String speech_text_buffer = "";
 DynamicJsonDocument chat_doc(1024*10);
-String json_ChatString = "{\"model\": \"gpt-3.5-turbo\",\"messages\": [{\"role\": \"user\", \"content\": \"""\"}]}";
+//String json_ChatString = "{\"model\": \"gpt-3.5-turbo\",\"messages\": [{\"role\": \"user\", \"content\": \"""\"}]}";
+String json_ChatString = "{\"contents\": [{ \"parts\": [{ \"text\": \"\" }]}]}";
 String Role_JSON = "";
 
 bool init_chat_doc(const char *data)
@@ -322,7 +321,6 @@ String https_post_json(const char* url, const char* json_string, const char* roo
         Serial.print("[HTTPS] POST...\n");
         // start connection and send HTTP header
         https.addHeader("Content-Type", "application/json");
-        https.addHeader("Authorization", String("Bearer ") + OPENAI_API_KEY);
         int httpCode = https.POST((uint8_t *)json_string, strlen(json_string));
   
         // httpCode will be negative on error
@@ -357,7 +355,8 @@ String chatGpt(String json_string) {
   String response = "";;
   avatar.setExpression(Expression::Doubt);
   avatar.setSpeechText("考え中…");
-  String ret = https_post_json("https://api.openai.com/v1/chat/completions", json_string.c_str(), root_ca_openai);
+  String https_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=" + GEMINI_API_KEY;
+  String ret = https_post_json(https_url.c_str(), json_string.c_str(), root_ca_google_gemini);
   avatar.setExpression(Expression::Neutral);
   avatar.setSpeechText("");
   Serial.println(ret);
@@ -374,7 +373,8 @@ String chatGpt(String json_string) {
       avatar.setSpeechText("");
       avatar.setExpression(Expression::Neutral);
     }else{
-      const char* data = doc["choices"][0]["message"]["content"];
+      JsonObject candidates0 = doc["candidates"][0];
+      const char* data = candidates0["content"]["parts"][0]["text"];
       Serial.println(data);
       response = String(data);
       std::replace(response.begin(),response.end(),'\n',' ');
@@ -413,14 +413,7 @@ void handle_chat() {
 
   for (int i = 0; i < chatHistory.size(); i++)
   {
-    JsonArray messages = chat_doc["messages"];
-    JsonObject systemMessage1 = messages.createNestedObject();
-    if(i % 2 == 0) {
-      systemMessage1["role"] = "user";
-    } else {
-      systemMessage1["role"] = "assistant";
-    }
-    systemMessage1["content"] = chatHistory[i];
+    chat_doc["contents"][0]["parts"][0]["text"] = chatHistory[i];
   }
 
   String json_string;
@@ -462,14 +455,7 @@ void exec_chatGPT(String text) {
 
   for (int i = 0; i < chatHistory.size(); i++)
   {
-    JsonArray messages = chat_doc["messages"];
-    JsonObject systemMessage1 = messages.createNestedObject();
-    if(i % 2 == 0) {
-      systemMessage1["role"] = "user";
-    } else {
-      systemMessage1["role"] = "assistant";
-    }
-    systemMessage1["content"] = chatHistory[i];
+    chat_doc["contents"][0]["parts"][0]["text"] = chatHistory[i];
   }
 
   String json_string;
@@ -521,23 +507,23 @@ void handle_apikey_set() {
   if (server.method() != HTTP_POST) {
     return;
   }
-  // openai
-  String openai = server.arg("openai");
+  // gemini
+  String gemini = server.arg("gemini");
   // voicetxt
   String voicevox = server.arg("voicevox");
   // voicetxt
   String sttapikey = server.arg("sttapikey");
  
-  OPENAI_API_KEY = openai;
+  GEMINI_API_KEY = gemini;
   VOICEVOX_API_KEY = voicevox;
   STT_API_KEY = sttapikey;
-  Serial.println(openai);
+  Serial.println(gemini);
   Serial.println(voicevox);
   Serial.println(sttapikey);
 
   uint32_t nvs_handle;
   if (ESP_OK == nvs_open("apikey", NVS_READWRITE, &nvs_handle)) {
-    nvs_set_str(nvs_handle, "openai", openai.c_str());
+    nvs_set_str(nvs_handle, "gemini", gemini.c_str());
     nvs_set_str(nvs_handle, "voicevox", voicevox.c_str());
     nvs_set_str(nvs_handle, "sttapikey", sttapikey.c_str());
     nvs_close(nvs_handle);
@@ -904,27 +890,15 @@ String SpeechToText(bool isGoogle){
   Serial.println("\r\nRecord start!\r\n");
 
   String ret = "";
-  if( isGoogle) {
-    Audio* audio = new Audio();
-    audio->Record();  
-    Serial.println("Record end\r\n");
-    Serial.println("音声認識開始");
-    avatar.setSpeechText("わかりました");  
-    CloudSpeechClient* cloudSpeechClient = new CloudSpeechClient(root_ca_google, STT_API_KEY.c_str());
-    ret = cloudSpeechClient->Transcribe(audio);
-    delete cloudSpeechClient;
-    delete audio;
-  } else {
-    AudioWhisper* audio = new AudioWhisper();
-    audio->Record();  
-    Serial.println("Record end\r\n");
-    Serial.println("音声認識開始");
-    avatar.setSpeechText("わかりました");  
-    Whisper* cloudSpeechClient = new Whisper(root_ca_openai, OPENAI_API_KEY.c_str());
-    ret = cloudSpeechClient->Transcribe(audio);
-    delete cloudSpeechClient;
-    delete audio;
-  }
+  Audio* audio = new Audio();
+  audio->Record();  
+  Serial.println("Record end\r\n");
+  Serial.println("音声認識開始");
+  avatar.setSpeechText("わかりました");  
+  CloudSpeechClient* cloudSpeechClient = new CloudSpeechClient(root_ca_google, STT_API_KEY.c_str());
+  ret = cloudSpeechClient->Transcribe(audio);
+  delete cloudSpeechClient;
+  delete audio;
   return ret;
 }
 
@@ -1156,7 +1130,7 @@ void setup()
   WiFi.mode(WIFI_STA);
 #ifndef USE_SDCARD
   WiFi.begin(WIFI_SSID, WIFI_PASS);
-  OPENAI_API_KEY = String(OPENAI_APIKEY);
+  GEMINI_API_KEY = String(GEMINI_APIKEY);
   VOICEVOX_API_KEY = String(VOICEVOX_APIKEY);
   STT_API_KEY = String(STT_APIKEY);
 #else
@@ -1205,7 +1179,7 @@ void setup()
             z = x;
         }
 
-        nvs_set_str(nvs_handle, "openai", buf);
+        nvs_set_str(nvs_handle, "gemini", buf);
         nvs_set_str(nvs_handle, "voicevox", &buf[y]);
         nvs_set_str(nvs_handle, "sttapikey", &buf[z]);
         Serial.println("------------------------");
@@ -1230,21 +1204,21 @@ void setup()
       size_t length1;
       size_t length2;
       size_t length3;
-      if(ESP_OK == nvs_get_str(nvs_handle, "openai", nullptr, &length1) && 
+      if(ESP_OK == nvs_get_str(nvs_handle, "gemini", nullptr, &length1) && 
          ESP_OK == nvs_get_str(nvs_handle, "voicevox", nullptr, &length2) && 
          ESP_OK == nvs_get_str(nvs_handle, "sttapikey", nullptr, &length3) && 
         length1 && length2 && length3) {
         Serial.println("nvs_get_str");
-        char openai_apikey[length1 + 1];
+        char gemini_apikey[length1 + 1];
         char voicevox_apikey[length2 + 1];
         char stt_apikey[length3 + 1];
-        if(ESP_OK == nvs_get_str(nvs_handle, "openai", openai_apikey, &length1) && 
+        if(ESP_OK == nvs_get_str(nvs_handle, "gemini", gemini_apikey, &length1) && 
            ESP_OK == nvs_get_str(nvs_handle, "voicevox", voicevox_apikey, &length2) &&
            ESP_OK == nvs_get_str(nvs_handle, "sttapikey", stt_apikey, &length3)) {
-          OPENAI_API_KEY = String(openai_apikey);
+          GEMINI_API_KEY = String(gemini_apikey);
           VOICEVOX_API_KEY = String(voicevox_apikey);
           STT_API_KEY = String(stt_apikey);
-          // Serial.println(OPENAI_API_KEY);
+          // Serial.println(GEMINI_API_KEY);
           // Serial.println(VOICEVOX_API_KEY);
           // Serial.println(STT_API_KEY);
         }
@@ -1405,14 +1379,9 @@ void voice_recognition(void)
   avatar.setSpeechText("御用でしょうか？");
   M5.Speaker.end();
   String ret;
-  if(OPENAI_API_KEY != STT_API_KEY){
-    Serial.println("Google STT");
-    ret = SpeechToText(true);
-  } else {
-    Serial.println("Whisper STT");
-    ret = SpeechToText(false);
-  }
-#ifdef USE_SERVO
+  Serial.println("Google STT");
+  ret = SpeechToText(true);
+  #ifdef USE_SERVO
   servo_home = prev_servo_home;
 #endif
   Serial.println("音声認識終了");
@@ -1526,7 +1495,7 @@ void loop()
         avatar.setSpeechText("御用でしょうか？");
         M5.Speaker.end();
         String ret;
-        if(OPENAI_API_KEY != STT_API_KEY){
+        if(GEMINI_API_KEY != STT_API_KEY){
           Serial.println("Google STT");
           ret = SpeechToText(true);
         } else {
