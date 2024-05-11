@@ -83,11 +83,20 @@ String CloudSpeechClient::Transcribe(Audio* audio) {
     if(text) {
       result = String (text);
       Serial.println((char *)text);
+      // 返却文字列の1文字目のコードで言語を判別
+      unsigned char c = text[0];
+      if (c < 0x80) {
+        language_code = "en_us";
+      } else {
+        language_code = "ja_jp";
+      }
+      Serial.printf("言語コード:%s\n", language_code.c_str());
     }
     else {
       Serial.println("NG");
     }
   }
+  // 結果の戦闘1文字で言語を判別（英語と日本語)
   return result;
 }
 

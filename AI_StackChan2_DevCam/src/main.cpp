@@ -10,9 +10,9 @@
 #include <AudioFileSourceBuffer.h>
 #include <AudioGeneratorMP3.h>
 #include "AudioFileSourceHTTPSStream.h"
+#include "AudioFileSourceVoiceTextStream.h"
 #include "AudioOutputM5Speaker.h"
 #include <ServoEasing.hpp> // https://github.com/ArminJo/ServoEasing       
-#include "WebVoiceVoxTTS.h"
 
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
@@ -24,6 +24,8 @@
 #include <deque>
 #include "Audio.h"
 #include "CloudSpeechClient.h"
+#include <google-tts.h>
+#include <AudioFileSourcePROGMEM.h>
 
 #if defined( ENABLE_FACE_DETECT )
 #include <esp_camera.h>
@@ -82,6 +84,19 @@ bool isSilentMode = false;
 
 #endif    //ENABLE_FACE_DETECT
 
+char* text1 = "Hello everyone, my name is Stack Chan, nice to meet you.";
+char* tts_parms1 ="&emotion_level=4&emotion=happiness&format=mp3&speaker=takeru&volume=200&speed=100&pitch=130"; // he has natural(16kHz) mp3 voice
+char* tts_parms2 ="&emotion=happiness&format=mp3&speaker=hikari&volume=200&speed=120&pitch=130"; // he has natural(16kHz) mp3 voice
+char* tts_parms3 ="&emotion=anger&format=mp3&speaker=bear&volume=200&speed=120&pitch=100"; // he has natural(16kHz) mp3 voice
+char* tts_parms4 ="&emotion_level=2&emotion=happiness&format=mp3&speaker=haruka&volume=200&speed=80&pitch=70";
+char* tts_parms5 ="&emotion_level=4&emotion=happiness&format=mp3&speaker=santa&volume=200&speed=120&pitch=90";
+char* tts_parms_table[5] = {tts_parms1,tts_parms2,tts_parms3,tts_parms4,tts_parms5};
+int tts_parms_no = 1;
+
+TTS tts;
+HTTPClient http;
+WiFiClient client;
+
 
 
 // 保存する質問と回答の最大数
@@ -139,6 +154,9 @@ String STT_API_KEY = "";
 String TTS_SPEAKER_NO = "3";
 String TTS_SPEAKER = "&speaker=";
 String TTS_PARMS = TTS_SPEAKER + TTS_SPEAKER_NO;
+String LANGUAGE_CODE = "ja_jp";
+
+extern void google_tts(char *text, String lang);
 
 //---------------------------------------------
 // C++11 multiline string constants are neato...
@@ -302,7 +320,7 @@ void handle_speech() {
   // 音声の発声
   ////////////////////////////////////////
   avatar.setExpression(Expression::Happy);
-  Voicevox_tts((char*)message.c_str(), (char*)TTS_PARMS.c_str());
+  google_tts((char*)message.c_str(), LANGUAGE_CODE);
   server.send(200, "text/plain", String("OK"));
 }
 
@@ -665,16 +683,16 @@ void handle_setting() {
   server.send(200, "text/plain", String("OK"));
 }
 
-AudioOutputM5Speaker out(&M5.Speaker, m5spk_virtual_channel);
+/// set M5Speaker virtual channel (0-7)
+//static constexpr uint8_t m5spk_virtual_channel = 0;
+static AudioOutputM5Speaker out(&M5.Speaker, m5spk_virtual_channel);
 AudioGeneratorMP3 *mp3;
+AudioFileSourceVoiceTextStream *file = nullptr;
 AudioFileSourceBuffer *buff = nullptr;
-int preallocateBufferSize = 30*1024;
+const int preallocateBufferSize = 10*1024;
 uint8_t *preallocateBuffer;
-AudioFileSourceHTTPSStream *file = nullptr;
-
-void playMP3(AudioFileSourceBuffer *buff){
-  mp3->begin(buff, &out);
-}
+AudioFileSourcePROGMEM *file1 = nullptr;
+uint8_t mp3buff[1024*50];
 
 // Called when a metadata event occurs (i.e. an ID3 tag, an ICY block, etc.
 void MDCallback(void *cbData, const char *type, bool isUnicode, const char *string)
@@ -702,6 +720,56 @@ void StatusCallback(void *cbData, int code, const char *string)
   Serial.printf("STATUS(%s) '%d' = '%s'\n", ptr, code, s1);
   Serial.flush();
 }
+
+
+
+void google_tts(char *text, String lang) {
+  Serial.println("tts Start");
+  String link =  "http" + tts.getSpeechUrl(text, lang).substring(5);
+//    String URL= "http" + tts.getSpeechUrl("こんにちは、世界！", "ja").substring(5);
+//    String link = "http" + tts.getSpeechUrl("Hello","en-US").substring(5);
+  Serial.println(link);
+
+  http.begin(client, link);
+  http.setReuse(true);
+  int code = http.GET();
+  if (code != HTTP_CODE_OK) {
+    http.end();
+//    cb.st(STATUS_HTTPFAIL, PSTR("Can't open HTTP request"));
+    return ;
+  }
+
+  WiFiClient *ttsclient = http.getStreamPtr();
+  if (ttsclient->available() > 0) {
+    int i = 0;
+    int len = sizeof(mp3buff);
+    int count = 0;
+    while (ttsclient->available() > 0) {
+      int bytesread = ttsclient->read(&mp3buff[i], len);
+//     Serial.printf("%d Bytes Read\n",bytesread);
+      i = i + bytesread;
+      if(i > sizeof(mp3buff))
+      {
+        break;
+      } else {
+        len = len - bytesread;
+        if(len <= 0) break;
+      }
+      delay(100);
+    }
+    Serial.printf("Total %d Bytes Read\n",i);
+    ttsclient->stop();
+    http.end();
+    file1 = new AudioFileSourcePROGMEM(mp3buff, i);
+    mp3->begin(file1, &out);
+  }
+}
+
+
+void playMP3(AudioFileSourceBuffer *buff){
+  mp3->begin(buff, &out);
+}
+
 
 #ifdef USE_SERVO
 #define START_DEGREE_VALUE_X 90
@@ -897,6 +965,7 @@ String SpeechToText(bool isGoogle){
   avatar.setSpeechText("わかりました");  
   CloudSpeechClient* cloudSpeechClient = new CloudSpeechClient(root_ca_google, STT_API_KEY.c_str());
   ret = cloudSpeechClient->Transcribe(audio);
+  LANGUAGE_CODE = cloudSpeechClient->getLanguage_code();
   delete cloudSpeechClient;
   delete audio;
   return ret;
@@ -1341,7 +1410,7 @@ void report_batt_level(){
   else
     sprintf(buff,"バッテリーのレベルは%d％です。",level);
   avatar.setExpression(Expression::Happy);
-  Voicevox_tts(buff, (char*)TTS_PARMS.c_str());
+  google_tts(buff, LANGUAGE_CODE);
   avatar.setExpression(Expression::Neutral);
   Serial.println("mp3 begin");
 }
@@ -1358,7 +1427,7 @@ void switch_monologue_mode(){
     }
     random_speak = !random_speak;
     avatar.setExpression(Expression::Happy);
-    Voicevox_tts((char*)tmp.c_str(), (char*)TTS_PARMS.c_str());
+    google_tts((char*)tmp.c_str(), LANGUAGE_CODE);
     avatar.setExpression(Expression::Neutral);
     Serial.println("mp3 begin");
 }
@@ -1580,7 +1649,7 @@ void loop()
     avatar.setExpression(Expression::Happy);
     speech_text_buffer = speech_text;
     speech_text = "";
-    Voicevox_tts((char*)speech_text_buffer.c_str(), (char*)TTS_PARMS.c_str());
+    google_tts((char*)speech_text_buffer.c_str(), LANGUAGE_CODE);
   }
 
   if (mp3->isRunning()) {

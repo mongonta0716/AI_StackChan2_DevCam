@@ -13,10 +13,13 @@ class CloudSpeechClient {
   void PrintHttpBody2(Audio* audio);
   String key;
 //  Authentication authentication;
+protected:
+  String language_code;
 public:
   CloudSpeechClient(const char* root_ca, const char* api_key);
   ~CloudSpeechClient();
   String Transcribe(Audio* audio);
+  String getLanguage_code() { return language_code; };
 };
 
 #endif // _CLOUDSPEECHCLIENT_H
