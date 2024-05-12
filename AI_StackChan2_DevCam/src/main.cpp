@@ -140,6 +140,10 @@ String TTS_SPEAKER_NO = "3";
 String TTS_SPEAKER = "&speaker=";
 String TTS_PARMS = TTS_SPEAKER + TTS_SPEAKER_NO;
 
+// Gemini対応での追加変数
+uint8_t system_instruction_no = 0;
+String system_instruction[3] = { "", "", "" };
+
 //---------------------------------------------
 // C++11 multiline string constants are neato...
 static const char HEAD[] PROGMEM = R"KEWL(
@@ -255,7 +259,7 @@ String speech_text = "";
 String speech_text_buffer = "";
 DynamicJsonDocument chat_doc(1024*10);
 //String json_ChatString = "{\"model\": \"gpt-3.5-turbo\",\"messages\": [{\"role\": \"user\", \"content\": \"""\"}]}";
-String json_ChatString = "{\"contents\": [{ \"parts\": [{ \"text\": \"\" }]}]}";
+String json_ChatString = "{\"contents\": [{ \"parts\": [{ \"text\": \"\" }]}], \"system_instruction\": {\"parts\": [{\"text\": \"\"}]}}";
 String Role_JSON = "";
 
 bool init_chat_doc(const char *data)
@@ -355,7 +359,7 @@ String chatGpt(String json_string) {
   String response = "";;
   avatar.setExpression(Expression::Doubt);
   avatar.setSpeechText("考え中…");
-  String https_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=" + GEMINI_API_KEY;
+  String https_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro-latest:generateContent?key=" + GEMINI_API_KEY;
   String ret = https_post_json(https_url.c_str(), json_string.c_str(), root_ca_google_gemini);
   avatar.setExpression(Expression::Neutral);
   avatar.setSpeechText("");
@@ -415,6 +419,7 @@ void handle_chat() {
   {
     chat_doc["contents"][0]["parts"][0]["text"] = chatHistory[i];
   }
+  chat_doc["system_instruction"]["parts"][0]["text"] = system_instruction[system_instruction_no];
 
   String json_string;
   serializeJson(chat_doc, json_string);
@@ -457,6 +462,7 @@ void exec_chatGPT(String text) {
   {
     chat_doc["contents"][0]["parts"][0]["text"] = chatHistory[i];
   }
+  chat_doc["system_instruction"]["parts"][0]["text"] = system_instruction[system_instruction_no];
 
   String json_string;
   serializeJson(chat_doc, json_string);
@@ -832,6 +838,7 @@ struct box_t
 static box_t box_servo;
 static box_t box_stt;
 static box_t box_BtnA;
+static box_t box_BtnB;
 static box_t box_BtnC;
 #if defined(ENABLE_FACE_DETECT)
 static box_t box_subWindow;
@@ -1064,6 +1071,7 @@ void setup()
   auto cfg = M5.config();
 
   cfg.external_spk = true;    /// use external speaker (SPK HAT / ATOMIC SPK)
+  cfg.output_power = false;
 //cfg.external_spk_detail.omit_atomic_spk = true; // exclude ATOMIC SPK
 //cfg.external_spk_detail.omit_spk_hat    = true; // exclude SPK HAT
 //  cfg.output_power = true;
@@ -1191,6 +1199,23 @@ void setup()
       
       nvs_close(nvs_handle);
     }
+    // ロール設定をjsonから読み込み
+    File file = SD.open("/system_instruction.json", FILE_READ);
+    int res = file.available();
+    Serial.printf("file:available:%d\n", res);
+    DynamicJsonDocument doc(1024);
+    DeserializationError error = deserializeJson(doc, file);
+    if (error) {
+        Serial.printf("json file read error: %s\n", "system_instruction");
+        Serial.printf("error%s\n", error.c_str());
+    }
+    JsonArray system_instruction_array = doc["system_instruction"];
+    for (int i=0; i<3;i++) {
+      system_instruction[i] = system_instruction_array[i].as<String>();
+      Serial.printf("System_Instruction:%d, %s\n", i, system_instruction[i].c_str());
+    }
+    file.close();
+
     SD.end();
   } else {
     WiFi.begin();
@@ -1317,6 +1342,7 @@ void setup()
 #endif
   
   box_BtnA.setupBox(0, 100, 40, 60);
+  box_BtnB.setupBox(0, 180, 40, 60);
   box_BtnC.setupBox(280, 100, 40, 60);
 
 #if defined(ENABLE_FACE_DETECT)
@@ -1551,6 +1577,19 @@ void loop()
         switch_monologue_mode();
 #endif
       }
+      if (box_BtnB.contain(t.x, t.y))
+      {
+        avatar.setSpeechText("PressBtnB");
+        system_instruction_no++;
+        if (system_instruction_no > 2) {
+          system_instruction_no = 0;
+        }
+      }
+
+
+
+
+
       if (box_BtnC.contain(t.x, t.y))
       {
 #if defined(ENABLE_FACE_DETECT)
